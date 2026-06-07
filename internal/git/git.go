@@ -28,7 +28,7 @@ type Commit struct {
 }
 
 type PullRequest struct {
-	ID          int
+	ID          int64
 	Title       string
 	Description string
 }
@@ -59,10 +59,6 @@ func (a Author) signature(when time.Time) *object.Signature {
 func (a Author) String() string {
 	return fmt.Sprintf("%s <%s>", a.Name, a.Email)
 }
-
-var (
-	committer = Author{Name: "releaser-pleaser", Email: ""}
-)
 
 func CloneRepo(ctx context.Context, logger *slog.Logger, cloneURL, branch string, auth transport.AuthMethod) (*Repository, error) {
 	dir, err := os.MkdirTemp("", "releaser-pleaser.*")
@@ -175,7 +171,7 @@ func (r *Repository) Commit(_ context.Context, message string, author Author) (C
 
 	releaseCommitHash, err := worktree.Commit(message, &git.CommitOptions{
 		Author:    author.signature(now),
-		Committer: committer.signature(now),
+		Committer: author.signature(now),
 	})
 	if err != nil {
 		return Commit{}, fmt.Errorf("failed to commit changes: %w", err)

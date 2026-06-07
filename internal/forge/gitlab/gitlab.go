@@ -11,7 +11,7 @@ import (
 	"github.com/blang/semver/v4"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	gitlab "gitlab.com/gitlab-org/api/client-go"
+	gitlab "gitlab.com/gitlab-org/api/client-go/v2"
 
 	"github.com/apricote/releaser-pleaser/internal/forge"
 	"github.com/apricote/releaser-pleaser/internal/git"
@@ -57,7 +57,7 @@ func (g *GitLab) ReleaseURL(version string) string {
 	return fmt.Sprintf("%s/-/releases/%s", g.RepoURL(), version)
 }
 
-func (g *GitLab) PullRequestURL(id int) string {
+func (g *GitLab) PullRequestURL(id int64) string {
 	return fmt.Sprintf("%s/-/merge_requests/%d", g.RepoURL(), id)
 }
 
@@ -260,6 +260,15 @@ func (g *GitLab) PullRequestForBranch(ctx context.Context, branch string) (*rele
 	return nil, nil
 }
 
+func (g *GitLab) PullRequestByID(ctx context.Context, pr *releasepr.ReleasePullRequest) (*releasepr.ReleasePullRequest, error) {
+	mr, _, err := g.client.MergeRequests.GetMergeRequest(g.options.Path, pr.ID, &gitlab.GetMergeRequestsOptions{}, gitlab.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+
+	return gitlabMRToReleasePullRequest(&mr.BasicMergeRequest), nil
+}
+
 func (g *GitLab) CreatePullRequest(ctx context.Context, pr *releasepr.ReleasePullRequest) error {
 	labels := make(gitlab.LabelOptions, 0, len(pr.Labels))
 	for _, label := range pr.Labels {
@@ -332,7 +341,7 @@ func (g *GitLab) ClosePullRequest(ctx context.Context, pr *releasepr.ReleasePull
 
 func (g *GitLab) PendingReleases(ctx context.Context, pendingLabel releasepr.Label) ([]*releasepr.ReleasePullRequest, error) {
 	glMRs, err := all(func(listOptions gitlab.ListOptions) ([]*gitlab.BasicMergeRequest, *gitlab.Response, error) {
-		return g.client.MergeRequests.ListMergeRequests(&gitlab.ListMergeRequestsOptions{
+		return g.client.MergeRequests.ListProjectMergeRequests(g.options.Path, &gitlab.ListProjectMergeRequestsOptions{
 			State:        pointer.Pointer(PRStateMerged),
 			Labels:       &gitlab.LabelOptions{pendingLabel.Name},
 			TargetBranch: pointer.Pointer(g.options.BaseBranch),
@@ -368,7 +377,7 @@ func (g *GitLab) CreateRelease(ctx context.Context, commit git.Commit, title, ch
 
 func all[T any](f func(listOptions gitlab.ListOptions) ([]T, *gitlab.Response, error)) ([]T, error) {
 	results := make([]T, 0)
-	page := 1
+	page := int64(1)
 
 	for {
 		pageResults, resp, err := f(gitlab.ListOptions{Page: page, PerPage: PerPageMax})
@@ -460,7 +469,7 @@ type Options struct {
 	Path       string
 
 	APIURL   string
-	APIToken string
+	APIToken string //gosec:disable G117
 }
 
 func New(log *slog.Logger, options *Options) (*GitLab, error) {

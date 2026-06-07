@@ -3,13 +3,19 @@ package forgejo
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v2"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/stretchr/testify/require"
 
+	"github.com/apricote/releaser-pleaser/internal/git"
 	"github.com/apricote/releaser-pleaser/test/e2e"
 )
 
@@ -103,11 +109,115 @@ func (f *TestForge) CreateRepo(t *testing.T, opts e2e.CreateRepoOpts) (*e2e.Repo
 	}, nil
 }
 
+func (f *TestForge) CloneURL(t *testing.T, repo *e2e.Repository) string {
+	t.Helper()
+
+	return fmt.Sprintf("%s/%s/%s.git", TestAPIURL, f.username, repo.Name)
+}
+
+func (f *TestForge) GitAuth(t *testing.T) transport.AuthMethod {
+	t.Helper()
+
+	return &http.BasicAuth{
+		Username: f.username,
+		Password: f.token,
+	}
+}
+
+func (f *TestForge) ListOpenPRs(t *testing.T, repo *e2e.Repository) ([]*git.PullRequest, error) {
+	t.Helper()
+
+	fPRs, _, err := f.client.ListRepoPullRequests(f.username, repo.Name, forgejo.ListPullRequestsOptions{
+		State: forgejo.StateOpen,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	prs := make([]*git.PullRequest, 0, len(fPRs))
+	for _, pr := range fPRs {
+		prs = append(prs, forgejoPRToPullRequest(pr))
+	}
+
+	return prs, nil
+}
+
+func (f *TestForge) MergePR(t *testing.T, repo *e2e.Repository, pr *git.PullRequest) error {
+	t.Helper()
+
+	// Wait for the PR to become mergable
+	retries := 10
+	sleep := 1 * time.Second
+
+	var fPR *forgejo.PullRequest
+	var err error
+	for range retries {
+		fPR, _, err = f.client.GetPullRequest(f.username, repo.Name, pr.ID)
+		if err != nil {
+			t.Logf("sleeping, error while checking pr mergeable status: %v", err)
+			time.Sleep(sleep)
+			continue
+		}
+
+		if !fPR.Mergeable {
+			t.Log("sleeping, pr not marked as mergeable yet")
+			time.Sleep(sleep)
+			continue
+		}
+
+		break
+	}
+
+	if !fPR.Mergeable {
+		return fmt.Errorf("pull request not marked as mergable by forgejo after retries")
+	}
+
+	ok, resp, err := f.client.MergePullRequest(f.username, repo.Name, pr.ID, forgejo.MergePullRequestOption{Style: forgejo.MergeStyleSquash})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("merging pull request #%d failed: %v", pr.ID, string(respBody))
+	}
+
+	return nil
+}
+
+func (f *TestForge) ListTags(t *testing.T, repo *e2e.Repository) ([]*git.Tag, error) {
+	t.Helper()
+
+	fTags, _, err := f.client.ListRepoTags(f.username, repo.Name, forgejo.ListRepoTagsOptions{})
+	require.NoError(t, err)
+
+	tags := make([]*git.Tag, 0, len(fTags))
+	for _, tag := range fTags {
+		tags = append(tags, forgejoTagToTag(tag))
+	}
+
+	return tags, nil
+}
+
 func (f *TestForge) RunArguments() []string {
 	return []string{"--forge=forgejo",
 		fmt.Sprintf("--owner=%s", f.username),
 		fmt.Sprintf("--api-url=%s", TestAPIURL),
 		fmt.Sprintf("--api-token=%s", f.token),
 		fmt.Sprintf("--username=%s", f.username),
+	}
+}
+
+func forgejoPRToPullRequest(pr *forgejo.PullRequest) *git.PullRequest {
+	return &git.PullRequest{
+		ID:          pr.Index,
+		Title:       pr.Title,
+		Description: pr.Body,
+	}
+}
+
+func forgejoTagToTag(tag *forgejo.Tag) *git.Tag {
+	return &git.Tag{
+		Hash: tag.Commit.SHA,
+		Name: tag.Name,
 	}
 }

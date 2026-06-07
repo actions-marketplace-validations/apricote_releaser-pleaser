@@ -12,7 +12,7 @@ import (
 	"github.com/blang/semver/v4"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/google/go-github/v74/github"
+	"github.com/google/go-github/v86/github"
 
 	"github.com/apricote/releaser-pleaser/internal/forge"
 	"github.com/apricote/releaser-pleaser/internal/git"
@@ -57,7 +57,7 @@ func (g *GitHub) ReleaseURL(version string) string {
 	return fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", g.options.Owner, g.options.Repo, version)
 }
 
-func (g *GitHub) PullRequestURL(id int) string {
+func (g *GitHub) PullRequestURL(id int64) string {
 	return fmt.Sprintf("https://github.com/%s/%s/pull/%d", g.options.Owner, g.options.Repo, id)
 }
 
@@ -295,6 +295,18 @@ func (g *GitHub) PullRequestForBranch(ctx context.Context, branch string) (*rele
 	return nil, nil
 }
 
+func (g *GitHub) PullRequestByID(ctx context.Context, pr *releasepr.ReleasePullRequest) (*releasepr.ReleasePullRequest, error) {
+	ghPR, _, err := g.client.PullRequests.Get(
+		ctx, g.options.Owner, g.options.Repo,
+		int(pr.ID),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return gitHubPRToReleasePullRequest(ghPR), nil
+}
+
 func (g *GitHub) CreatePullRequest(ctx context.Context, pr *releasepr.ReleasePullRequest) error {
 	// If the Pull Request is created without the labels releaser-pleaser will create a new PR in the run. The user may merge both and have duplicate entries in the changelog.
 	// We try to avoid this situation by checking for a cancelled context first, and then running both API calls without passing along any cancellations.
@@ -316,7 +328,7 @@ func (g *GitHub) CreatePullRequest(ctx context.Context, pr *releasepr.ReleasePul
 		return err
 	}
 
-	pr.ID = ghPR.GetNumber()
+	pr.ID = int64(ghPR.GetNumber())
 
 	err = g.SetPullRequestLabels(ctx, pr, []releasepr.Label{}, pr.Labels)
 	if err != nil {
@@ -329,7 +341,7 @@ func (g *GitHub) CreatePullRequest(ctx context.Context, pr *releasepr.ReleasePul
 func (g *GitHub) UpdatePullRequest(ctx context.Context, pr *releasepr.ReleasePullRequest) error {
 	_, _, err := g.client.PullRequests.Edit(
 		ctx, g.options.Owner, g.options.Repo,
-		pr.ID, &github.PullRequest{
+		int(pr.ID), &github.PullRequest{
 			Title: &pr.Title,
 			Body:  &pr.Description,
 		},
@@ -345,7 +357,7 @@ func (g *GitHub) SetPullRequestLabels(ctx context.Context, pr *releasepr.Release
 	for _, label := range remove {
 		_, err := g.client.Issues.RemoveLabelForIssue(
 			ctx, g.options.Owner, g.options.Repo,
-			pr.ID, label.Name,
+			int(pr.ID), label.Name,
 		)
 		if err != nil {
 			return err
@@ -359,7 +371,7 @@ func (g *GitHub) SetPullRequestLabels(ctx context.Context, pr *releasepr.Release
 
 	_, _, err := g.client.Issues.AddLabelsToIssue(
 		ctx, g.options.Owner, g.options.Repo,
-		pr.ID, addString,
+		int(pr.ID), addString,
 	)
 	if err != nil {
 		return err
@@ -371,7 +383,7 @@ func (g *GitHub) SetPullRequestLabels(ctx context.Context, pr *releasepr.Release
 func (g *GitHub) ClosePullRequest(ctx context.Context, pr *releasepr.ReleasePullRequest) error {
 	_, _, err := g.client.PullRequests.Edit(
 		ctx, g.options.Owner, g.options.Repo,
-		pr.ID, &github.PullRequest{
+		int(pr.ID), &github.PullRequest{
 			State: pointer.Pointer(PRStateClosed),
 		},
 	)
@@ -464,7 +476,7 @@ func all[T any](f func(listOptions github.ListOptions) ([]T, *github.Response, e
 
 func gitHubPRToPullRequest(pr *github.PullRequest) *git.PullRequest {
 	return &git.PullRequest{
-		ID:          pr.GetNumber(),
+		ID:          int64(pr.GetNumber()),
 		Title:       pr.GetTitle(),
 		Description: pr.GetBody(),
 	}
@@ -521,7 +533,7 @@ type Options struct {
 	Owner string
 	Repo  string
 
-	APIToken string
+	APIToken string //gosec:disable G117
 	Username string
 }
 

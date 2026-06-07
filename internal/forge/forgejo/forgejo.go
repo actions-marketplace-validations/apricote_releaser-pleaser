@@ -41,7 +41,7 @@ func (f *Forgejo) ReleaseURL(version string) string {
 	return fmt.Sprintf("%s/releases/tag/%s", f.RepoURL(), version)
 }
 
-func (f *Forgejo) PullRequestURL(id int) string {
+func (f *Forgejo) PullRequestURL(id int64) string {
 	return fmt.Sprintf("%s/pulls/%d", f.RepoURL(), id)
 }
 
@@ -264,6 +264,18 @@ func (f *Forgejo) PullRequestForBranch(_ context.Context, branch string) (*relea
 	return nil, nil
 }
 
+func (f *Forgejo) PullRequestByID(_ context.Context, pr *releasepr.ReleasePullRequest) (*releasepr.ReleasePullRequest, error) {
+	fPR, _, err := f.client.GetPullRequest(
+		f.options.Owner, f.options.Repo,
+		pr.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return forgejoPRToReleasePullRequest(fPR), nil
+}
+
 func (f *Forgejo) CreatePullRequest(ctx context.Context, pr *releasepr.ReleasePullRequest) error {
 	fPR, _, err := f.client.CreatePullRequest(
 		f.options.Owner, f.options.Repo,
@@ -279,7 +291,7 @@ func (f *Forgejo) CreatePullRequest(ctx context.Context, pr *releasepr.ReleasePu
 	}
 
 	// TODO: String ID?
-	pr.ID = int(fPR.ID)
+	pr.ID = fPR.Index
 
 	err = f.SetPullRequestLabels(ctx, pr, []releasepr.Label{}, pr.Labels)
 	if err != nil {
@@ -292,9 +304,9 @@ func (f *Forgejo) CreatePullRequest(ctx context.Context, pr *releasepr.ReleasePu
 func (f *Forgejo) UpdatePullRequest(_ context.Context, pr *releasepr.ReleasePullRequest) error {
 	_, _, err := f.client.EditPullRequest(
 		f.options.Owner, f.options.Repo,
-		int64(pr.ID), forgejo.EditPullRequestOption{
+		pr.ID, forgejo.EditPullRequestOption{
 			Title: pr.Title,
-			Body:  pr.Description,
+			Body:  &pr.Description,
 		},
 	)
 	if err != nil {
@@ -332,7 +344,7 @@ func (f *Forgejo) SetPullRequestLabels(_ context.Context, pr *releasepr.ReleaseP
 
 		_, err = f.client.DeleteIssueLabel(
 			f.options.Owner, f.options.Repo,
-			int64(pr.ID), fLabel.ID,
+			pr.ID, fLabel.ID,
 		)
 		if err != nil {
 			return err
@@ -351,7 +363,7 @@ func (f *Forgejo) SetPullRequestLabels(_ context.Context, pr *releasepr.ReleaseP
 
 	_, _, err = f.client.AddIssueLabels(
 		f.options.Owner, f.options.Repo,
-		int64(pr.ID), forgejo.IssueLabelsOption{Labels: addIDs},
+		pr.ID, forgejo.IssueLabelsOption{Labels: addIDs},
 	)
 	if err != nil {
 		return err
@@ -363,7 +375,7 @@ func (f *Forgejo) SetPullRequestLabels(_ context.Context, pr *releasepr.ReleaseP
 func (f *Forgejo) ClosePullRequest(_ context.Context, pr *releasepr.ReleasePullRequest) error {
 	_, _, err := f.client.EditPullRequest(
 		f.options.Owner, f.options.Repo,
-		int64(pr.ID), forgejo.EditPullRequestOption{
+		pr.ID, forgejo.EditPullRequestOption{
 			State: pointer.Pointer(forgejo.StateClosed),
 		},
 	)
@@ -452,7 +464,7 @@ func all[T any](f func(listOptions forgejo.ListOptions) ([]T, *forgejo.Response,
 
 func forgejoPRToPullRequest(pr *forgejo.PullRequest) *git.PullRequest {
 	return &git.PullRequest{
-		ID:          int(pr.ID),
+		ID:          pr.Index,
 		Title:       pr.Title,
 		Description: pr.Body,
 	}
@@ -505,7 +517,7 @@ type Options struct {
 
 	APIURL   string
 	Username string
-	APIToken string
+	APIToken string //gosec:disable G117
 }
 
 func New(log *slog.Logger, options *Options) (*Forgejo, error) {
